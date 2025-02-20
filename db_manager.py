@@ -1,4 +1,7 @@
 import chromadb
+from chromadb.config import Settings
+import os
+import tempfile
 from jieba import lcut  # 中文分詞
 from gensim.models import KeyedVectors
 import numpy as np
@@ -13,38 +16,55 @@ jieba.setLogLevel(logging.INFO)
 
 class ChromaDBManager:
     def __init__(self):
+        # 使用臨時目錄作為持久化存儲
+        self.persist_directory = os.path.join(tempfile.gettempdir(), 'chromadb')
+        
+        # 確保目錄存在
+        os.makedirs(self.persist_directory, exist_ok=True)
+        
+        # 初始化 ChromaDB 客戶端
+        self.client = chromadb.PersistentClient(path=self.persist_directory)
+        
+        # 初始化或獲取集合
         try:
-            self.client = chromadb.PersistentClient(path="./chroma_db")
-            self.collection = self.client.get_or_create_collection("documents")
-            self.chunk_size = 500  # 調整分塊大小
-            self.chunk_overlap = 100  # 增加重疊以避免切斷重要信息
-            self.tokenizer = tiktoken.encoding_for_model("gpt-4")
-            
-            # 同義詞字典（可以根據需要擴充）
-            self.synonyms = {
-                "價格": ["金額", "費用", "成本", "價位"],
-                "時間": ["時候", "日期", "期間", "時段"],
-                "位置": ["地點", "地方", "場所", "處所"],
-                # 可以繼續添加更多同義詞
-            }
+            self.collection = self.client.get_or_create_collection(name="document_qa")
         except Exception as e:
-            print(f"Error initializing ChromaDB: {e}")
-            self.client = None
+            print(f"Error initializing collection: {e}")
+            self.collection = None
+        
+        self.chunk_size = 500
+        self.chunk_overlap = 100
+        
+        # 同義詞字典
+        self.synonyms = {
+            "價格": ["金額", "費用", "成本", "價位"],
+            "時間": ["時候", "日期", "期間", "時段"],
+            "位置": ["地點", "地方", "場所", "處所"],
+        }
 
-    def store_documents(self, text_chunks, page_numbers):
-        """儲存文件片段和對應的頁碼"""
-        try:
-            # 生成唯一ID
-            ids = [f"doc_{i}" for i in range(len(text_chunks))]
+    def store_documents(self, documents, page_numbers):
+        """存儲文檔到向量數據庫"""
+        if not documents:
+            return
             
-            # 將頁碼資訊加入 metadata
+        if self.collection is None:
+            try:
+                self.collection = self.client.get_or_create_collection(name="document_qa")
+            except Exception as e:
+                print(f"Error creating collection: {e}")
+                return
+
+        try:
+            # 準備數據
+            ids = [f"doc_{i}" for i in range(len(documents))]
+            # 將頁碼轉換為字典格式的 metadata
             metadatas = [{"page": str(page)} for page in page_numbers]
             
-            # 儲存到資料庫
+            # 添加文檔
             self.collection.add(
-                documents=text_chunks,
+                documents=documents,
                 ids=ids,
-                metadatas=metadatas
+                metadatas=metadatas  # 確保 metadata 是字典格式
             )
         except Exception as e:
             print(f"Error storing documents: {e}")
@@ -64,61 +84,24 @@ class ChromaDBManager:
         """計算文本的 token 數量"""
         return len(self.tokenizer.encode(text))
 
-    def search_similar(self, query: str, top_k: int = 10, max_tokens: int = 6000) -> Tuple[List[str], List[dict]]:
-        query_words = lcut(query)
-        expanded_words = []
-        for word in query_words:
-            expanded_words.extend(self.get_synonyms(word))
-        expanded_words = list(set(expanded_words))
+    def search_similar(self, query: str, top_k: int = 10) -> Tuple[List[str], List[dict]]:
+        """搜索相似文檔"""
+        if self.collection is None:
+            return [], []
 
-        results = self.collection.query(
-            query_texts=[query],
-            n_results=top_k * 2,
-        )
-        
-        documents = results['documents'][0]
-        metadatas = results['metadatas'][0]
-        
-        # 計算相關性分數並限制 token 數量
-        scored_results = []
-        total_tokens = 0
-        
-        for doc, meta in zip(documents, metadatas):
-            score = 0
-            doc_words = lcut(doc)
-            doc_tokens = self.count_tokens(doc)
+        try:
+            results = self.collection.query(
+                query_texts=[query],
+                n_results=top_k
+            )
             
-            # 計算分數
-            for word in expanded_words:
-                if word in doc:
-                    score += 1
-            
-            for i in range(len(query_words) - 1):
-                query_phrase = query_words[i] + query_words[i + 1]
-                for j in range(len(doc_words) - 1):
-                    doc_phrase = doc_words[j] + doc_words[j + 1]
-                    if self.string_similarity(query_phrase, doc_phrase) > 0.8:
-                        score += 0.5
-            
-            scored_results.append((doc, meta, score, doc_tokens))
-        
-        # 根據分數排序
-        scored_results.sort(key=lambda x: x[2], reverse=True)
-        
-        # 選擇最相關的文檔，同時確保不超過 token 限制
-        filtered_docs = []
-        filtered_metadata = []
-        current_tokens = 0
-        
-        for doc, meta, _, doc_tokens in scored_results:
-            if current_tokens + doc_tokens <= max_tokens:
-                filtered_docs.append(doc)
-                filtered_metadata.append(meta)
-                current_tokens += doc_tokens
-            else:
-                break
-        
-        return filtered_docs, filtered_metadata
+            if not results['documents']:
+                return [], []
+                
+            return results['documents'][0], results['metadatas'][0]
+        except Exception as e:
+            print(f"Error searching documents: {e}")
+            return [], []
 
     def process_text(self, text):
         """文本分塊處理"""

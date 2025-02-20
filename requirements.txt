@@ -1,5 +1,5 @@
 openai
-chromadb
+chromadb>=0.4.0
 tiktoken
 jieba
 streamlit
