@@ -1,0 +1,8 @@
+openai
+chromadb
+tiktoken
+jieba
+streamlit
+python-docx
+PyPDF2
+gensim 
