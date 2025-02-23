@@ -9,22 +9,26 @@ from chromadb.config import Settings
 from typing import List, Tuple
 import jieba
 import logging
+import tempfile
+import os
 
 # 禁用 jieba 的日誌輸出
 jieba.setLogLevel(logging.INFO)
 
 class ChromaDBManager:
     def __init__(self):
-        # 使用最簡單的內存設置
-        self.client = chromadb.Client(
-            Settings(
-                is_persistent=False,  # 禁用持久化
-                anonymized_telemetry=False
-            )
-        )
+        # 創建臨時目錄
+        self.temp_dir = os.path.join(tempfile.gettempdir(), 'chromadb_temp')
+        os.makedirs(self.temp_dir, exist_ok=True)
+        
+        # 初始化客戶端
+        self.client = chromadb.EphemeralClient()  # 使用臨時內存客戶端
         
         try:
-            self.collection = self.client.create_collection(name="document_qa")
+            self.collection = self.client.create_collection(
+                name="document_qa",
+                metadata={"hnsw:space": "cosine"}
+            )
         except Exception as e:
             print(f"Error initializing collection: {e}")
             self.collection = None
@@ -38,7 +42,10 @@ class ChromaDBManager:
             # 重新創建集合（清除舊數據）
             if self.collection is not None:
                 self.client.delete_collection("document_qa")
-            self.collection = self.client.create_collection(name="document_qa")
+            self.collection = self.client.create_collection(
+                name="document_qa",
+                metadata={"hnsw:space": "cosine"}
+            )
             
             # 準備數據
             ids = [f"doc_{i}" for i in range(len(documents))]
