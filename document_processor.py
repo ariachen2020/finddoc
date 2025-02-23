@@ -1,106 +1,87 @@
-import PyPDF2
+from PyPDF2 import PdfReader
 from docx import Document
-import tiktoken
-from typing import List
+import jieba
+from typing import Tuple, List
 
 class DocumentProcessor:
-    def __init__(self, chunk_size=1000):
-        self.chunk_size = chunk_size
-        self.tokenizer = tiktoken.get_encoding("cl100k_base")
-    
-    def process_document(self, file):
-        """處理上傳的文件，返回文本片段和對應頁碼"""
-        text_chunks = []
-        page_numbers = []
-        
-        if file.name.endswith('.pdf'):
-            text_chunks, page_numbers = self._process_pdf(file)
-        elif file.name.endswith('.docx'):
-            text_chunks, page_numbers = self._process_docx(file)
-        elif file.name.endswith('.txt'):
-            text_chunks, page_numbers = self._process_txt(file)
-            
-        return text_chunks, page_numbers
+    def __init__(self):
+        self.chunk_size = 500
+        self.chunk_overlap = 100
 
-    def _process_pdf(self, file):
-        import io
+    def process_file(self, file) -> Tuple[List[str], List[int]]:
+        """處理上傳的文件，返回文本塊和對應的頁碼"""
+        file_name = file.name.lower()
         
+        if file_name.endswith('.pdf'):
+            return self._process_pdf(file)
+        elif file_name.endswith('.docx'):
+            return self._process_docx(file)
+        elif file_name.endswith('.txt'):
+            return self._process_txt(file)
+        else:
+            raise ValueError("不支援的文件格式")
+
+    def _process_pdf(self, file) -> Tuple[List[str], List[int]]:
+        """處理 PDF 文件"""
+        reader = PdfReader(file)
         text_chunks = []
         page_numbers = []
-        pdf_reader = PyPDF2.PdfReader(io.BytesIO(file.read()))
         
-        for page_num in range(len(pdf_reader.pages)):
-            page = pdf_reader.pages[page_num]
+        for page_num, page in enumerate(reader.pages, 1):
             text = page.extract_text()
-            
-            # 將頁面文本分割成較小的片段
+            if not text.strip():
+                continue
+                
             chunks = self._split_text(text)
             text_chunks.extend(chunks)
-            # 為每個文本片段記錄對應的頁碼
-            page_numbers.extend([page_num + 1] * len(chunks))
+            page_numbers.extend([page_num] * len(chunks))
             
         return text_chunks, page_numbers
 
-    def _process_docx(self, file):
-        import io
-        
+    def _process_docx(self, file) -> Tuple[List[str], List[int]]:
+        """處理 Word 文件"""
+        doc = Document(file)
         text_chunks = []
         page_numbers = []
-        doc = Document(io.BytesIO(file.read()))
+        current_page = 1
         
-        # 注意：docx 不直接支持頁碼，這裡用段落序號代替
-        for para_num, paragraph in enumerate(doc.paragraphs):
-            if paragraph.text.strip():
-                chunks = self._split_text(paragraph.text)
-                text_chunks.extend(chunks)
-                # 使用段落序號作為標識
-                page_numbers.extend([para_num + 1] * len(chunks))
-                
+        full_text = ""
+        for para in doc.paragraphs:
+            full_text += para.text + "\n"
+            
+        chunks = self._split_text(full_text)
+        text_chunks.extend(chunks)
+        page_numbers.extend([current_page] * len(chunks))
+        
         return text_chunks, page_numbers
 
-    def _process_txt(self, file):
-        text_chunks = []
-        page_numbers = []
-        content = file.read().decode('utf-8')
+    def _process_txt(self, file) -> Tuple[List[str], List[int]]:
+        """處理純文本文件"""
+        text = file.read().decode('utf-8')
+        chunks = self._split_text(text)
+        page_numbers = [1] * len(chunks)  # 純文本文件視為單頁
         
-        # 對於txt文件，以行數作為標識
-        lines = content.split('\n')
-        current_chunk = []
-        current_line = 1
-        
-        for line in lines:
-            if line.strip():
-                current_chunk.append(line)
-                if len(current_chunk) >= 3:  # 每3行作為一個chunk
-                    text_chunks.append('\n'.join(current_chunk))
-                    page_numbers.append(current_line)
-                    current_chunk = []
-            current_line += 1
-            
-        if current_chunk:  # 處理最後剩餘的行
-            text_chunks.append('\n'.join(current_chunk))
-            page_numbers.append(current_line)
-            
-        return text_chunks, page_numbers
+        return chunks, page_numbers
 
-    def _split_text(self, text, chunk_size=1000):
-        """將文本分割成較小的片段"""
+    def _split_text(self, text: str) -> List[str]:
+        """將文本分割成小塊"""
+        words = list(jieba.cut(text))
         chunks = []
         current_chunk = []
-        current_size = 0
+        current_length = 0
         
-        for sentence in text.split('.'):
-            sentence = sentence.strip() + '.'
-            if current_size + len(sentence) > chunk_size:
-                if current_chunk:
-                    chunks.append(' '.join(current_chunk))
-                current_chunk = [sentence]
-                current_size = len(sentence)
-            else:
-                current_chunk.append(sentence)
-                current_size += len(sentence)
-                
+        for word in words:
+            current_chunk.append(word)
+            current_length += len(word)
+            
+            if current_length >= self.chunk_size:
+                chunks.append("".join(current_chunk))
+                # 保留一部分文本作為重疊
+                overlap_words = current_chunk[-self.chunk_overlap:]
+                current_chunk = overlap_words
+                current_length = sum(len(w) for w in overlap_words)
+        
         if current_chunk:
-            chunks.append(' '.join(current_chunk))
+            chunks.append("".join(current_chunk))
             
         return chunks 
