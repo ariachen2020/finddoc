@@ -1,16 +1,6 @@
-# SQLite 版本修復
-__import__('pysqlite3')
-import sys
-sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
-
-# 其他導入
-import chromadb
-from chromadb.config import Settings
 from typing import List, Tuple
 import jieba
 import logging
-import tempfile
-import os
 from difflib import SequenceMatcher
 
 # 禁用 jieba 的日誌輸出
