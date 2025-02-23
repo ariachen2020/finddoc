@@ -1,8 +1,11 @@
 from typing import List, Tuple
 import jieba
 import logging
+import warnings
 from difflib import SequenceMatcher
 
+# 禁用 jieba 的警告
+warnings.filterwarnings("ignore", category=SyntaxWarning)
 # 禁用 jieba 的日誌輸出
 jieba.setLogLevel(logging.INFO)
 
