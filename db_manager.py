@@ -11,82 +11,56 @@ import jieba
 import logging
 import tempfile
 import os
+from difflib import SequenceMatcher
 
 # 禁用 jieba 的日誌輸出
 jieba.setLogLevel(logging.INFO)
 
 class ChromaDBManager:
     def __init__(self):
-        # 創建臨時目錄
-        self.temp_dir = os.path.join(tempfile.gettempdir(), 'chromadb_temp')
-        os.makedirs(self.temp_dir, exist_ok=True)
+        self.documents = []
+        self.metadatas = []
         
-        # 初始化客戶端
-        settings = Settings(
-            is_persistent=False,
-            allow_reset=True,
-            anonymized_telemetry=False
-        )
-        
-        try:
-            self.client = chromadb.Client(settings)
-            self.collection = self.client.create_collection(
-                name="document_qa",
-                metadata={"hnsw:space": "cosine"}
-            )
-        except Exception as e:
-            print(f"Error initializing client or collection: {e}")
-            # 嘗試備用初始化方法
-            try:
-                self.client = chromadb.Client()
-                self.collection = self.client.create_collection(name="document_qa")
-            except Exception as e2:
-                print(f"Backup initialization also failed: {e2}")
-                self.client = None
-                self.collection = None
+    def string_similarity(self, a: str, b: str) -> float:
+        """計算兩個字符串的相似度"""
+        return SequenceMatcher(None, a.lower(), b.lower()).ratio()
 
-    def store_documents(self, documents, page_numbers):
-        """存儲文檔到向量數據庫"""
-        if not documents or self.client is None:
+    def store_documents(self, documents: List[str], page_numbers: List[int]):
+        """存儲文檔"""
+        if not documents:
             return
             
-        try:
-            # 重新創建集合（清除舊數據）
-            try:
-                self.client.delete_collection("document_qa")
-            except:
-                pass
-                
-            self.collection = self.client.create_collection(name="document_qa")
-            
-            # 準備數據
-            ids = [f"doc_{i}" for i in range(len(documents))]
-            metadatas = [{"page": str(page)} for page in page_numbers]
-            
-            # 添加文檔
-            self.collection.add(
-                documents=documents,
-                ids=ids,
-                metadatas=metadatas
-            )
-        except Exception as e:
-            print(f"Error storing documents: {e}")
+        # 清除舊數據
+        self.documents = documents
+        self.metadatas = [{"page": str(page)} for page in page_numbers]
 
     def search_similar(self, query: str, top_k: int = 10) -> Tuple[List[str], List[dict]]:
         """搜索相似文檔"""
-        if self.collection is None:
+        if not self.documents:
             return [], []
 
-        try:
-            results = self.collection.query(
-                query_texts=[query],
-                n_results=min(top_k, len(self.collection.get()['ids']))
-            )
+        # 計算每個文檔片段與查詢的相似度
+        similarities = []
+        query_words = set(jieba.cut(query))
+        
+        for doc in self.documents:
+            # 1. 關鍵詞匹配
+            doc_words = set(jieba.cut(doc))
+            word_overlap = len(query_words & doc_words) / len(query_words) if query_words else 0
             
-            if not results['documents']:
-                return [], []
-                
-            return results['documents'][0], results['metadatas'][0]
-        except Exception as e:
-            print(f"Error searching documents: {e}")
-            return [], [] 
+            # 2. 字符串相似度
+            string_sim = self.string_similarity(query, doc)
+            
+            # 3. 計算總分數 (加權平均)
+            score = (word_overlap * 0.7) + (string_sim * 0.3)
+            similarities.append(score)
+        
+        # 獲取最相似的文檔
+        sorted_indices = sorted(range(len(similarities)), 
+                              key=lambda i: similarities[i], 
+                              reverse=True)[:top_k]
+        
+        result_docs = [self.documents[i] for i in sorted_indices if similarities[i] > 0]
+        result_metadata = [self.metadatas[i] for i in sorted_indices if similarities[i] > 0]
+        
+        return result_docs, result_metadata 
