@@ -22,30 +22,42 @@ class ChromaDBManager:
         os.makedirs(self.temp_dir, exist_ok=True)
         
         # 初始化客戶端
-        self.client = chromadb.EphemeralClient()  # 使用臨時內存客戶端
+        settings = Settings(
+            is_persistent=False,
+            allow_reset=True,
+            anonymized_telemetry=False
+        )
         
         try:
+            self.client = chromadb.Client(settings)
             self.collection = self.client.create_collection(
                 name="document_qa",
                 metadata={"hnsw:space": "cosine"}
             )
         except Exception as e:
-            print(f"Error initializing collection: {e}")
-            self.collection = None
+            print(f"Error initializing client or collection: {e}")
+            # 嘗試備用初始化方法
+            try:
+                self.client = chromadb.Client()
+                self.collection = self.client.create_collection(name="document_qa")
+            except Exception as e2:
+                print(f"Backup initialization also failed: {e2}")
+                self.client = None
+                self.collection = None
 
     def store_documents(self, documents, page_numbers):
         """存儲文檔到向量數據庫"""
-        if not documents:
+        if not documents or self.client is None:
             return
             
         try:
             # 重新創建集合（清除舊數據）
-            if self.collection is not None:
+            try:
                 self.client.delete_collection("document_qa")
-            self.collection = self.client.create_collection(
-                name="document_qa",
-                metadata={"hnsw:space": "cosine"}
-            )
+            except:
+                pass
+                
+            self.collection = self.client.create_collection(name="document_qa")
             
             # 準備數據
             ids = [f"doc_{i}" for i in range(len(documents))]
