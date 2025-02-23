@@ -16,16 +16,15 @@ jieba.setLogLevel(logging.INFO)
 
 class ChromaDBManager:
     def __init__(self):
-        # 使用臨時目錄作為持久化存儲
-        self.persist_directory = os.path.join(tempfile.gettempdir(), 'chromadb')
+        # 使用內存模式
+        self.client = chromadb.Client(
+            Settings(
+                chroma_db_impl="duckdb+parquet",
+                persist_directory=":memory:",  # 使用內存模式
+                anonymized_telemetry=False
+            )
+        )
         
-        # 確保目錄存在
-        os.makedirs(self.persist_directory, exist_ok=True)
-        
-        # 初始化 ChromaDB 客戶端
-        self.client = chromadb.PersistentClient(path=self.persist_directory)
-        
-        # 初始化或獲取集合
         try:
             self.collection = self.client.get_or_create_collection(name="document_qa")
         except Exception as e:
@@ -57,14 +56,13 @@ class ChromaDBManager:
         try:
             # 準備數據
             ids = [f"doc_{i}" for i in range(len(documents))]
-            # 將頁碼轉換為字典格式的 metadata
             metadatas = [{"page": str(page)} for page in page_numbers]
             
             # 添加文檔
             self.collection.add(
                 documents=documents,
                 ids=ids,
-                metadatas=metadatas  # 確保 metadata 是字典格式
+                metadatas=metadatas
             )
         except Exception as e:
             print(f"Error storing documents: {e}")
